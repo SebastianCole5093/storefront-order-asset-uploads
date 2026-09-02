@@ -1,0 +1,1 @@
+"""Storefront asset upload service."""
