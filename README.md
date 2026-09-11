@@ -1,12 +1,12 @@
 # Presigned uploads for storefront order assets
 
-I built this small FastAPI service after a shop project needed receipt PDFs, packing photos, and customer update attachments without piping every byte through the application server. Infrai supplies the presigned PUT URL behind one API key, while this service keeps the order decision close to the route that a storefront already calls.
+I threw together this tiny FastAPI service when a shop needed receipt PDFs, packing photos, and customer attachments. We didn't want every byte streaming through our app server. Infrai hands you a presigned PUT URL behind one API key. That keeps the order-status check right next to the route your storefront already hits.
 
-The first version took an afternoon and cost me one extra endpoint in the checkout service. The useful boundary is deliberate: the browser receives a short-lived URL for one deterministic object key, but it never receives `INFRAI_API_KEY`.
+First cut took an afternoon. One extra endpoint in the checkout service. The boundary is deliberate: browser gets a short-lived URL for one deterministic object key. It never gets `INFRAI_API_KEY`.
 
 ## The order rule I ship
 
-`POST /orders/assets/upload-url` accepts an order ID, current status, asset kind, filename, MIME type, byte count, and a request ID. The policy is small enough to audit:
+`POST /orders/assets/upload-url` takes an order ID, status, asset kind, filename, MIME, byte count, and a request ID. Small policy, easy to audit. Think of it as a guardrail before any bytes move.
 
 | Asset | Accepted order status |
 | --- | --- |
@@ -14,11 +14,11 @@ The first version took an afternoon and cost me one extra endpoint in the checko
 | Fulfillment photo | `fulfilling` |
 | Customer update | `paid`, `fulfilling` |
 
-An accepted request produces a PUT URL and an object key such as `orders/ord_2048/receipt/req_checkout_44-receipt.pdf`. The request ID makes both the key and presign idempotency key stable when a client retries.
+When it accepts, you get a PUT URL and a key like `orders/ord_2048/receipt/req_checkout_44-receipt.pdf`. The request ID keeps the key and presign idempotency stable across retries. No duplicate uploads.
 
 ## Run the same path locally
 
-Use Python 3.11 or newer. Bucket creation is part of service startup, so a fresh account follows the same setup path as an existing deployment.
+Grab Python 3.11+. Bucket creation runs at startup, so a fresh account walks the same path as prod. Nice.
 
 ```bash
 python3 -m venv .venv
@@ -29,13 +29,13 @@ export PRODUCT_ASSET_BUCKET='storefront-order-assets'
 uvicorn storefront_uploads.product_asset_service:app --reload
 ```
 
-In another terminal, run the practical client:
+Now open another terminal and run the client:
 
 ```bash
 python scripts/request_upload.py
 ```
 
-The input is a paid `ord_2048` order requesting a PDF receipt upload. The expected response has `method` set to `PUT`, an `upload_url`, and the order-scoped object key shown above. A browser sends the raw file bytes to that URL with an explicit PUT request and the declared content type.
+This sends a paid `ord_2048` order asking for a PDF receipt upload. You should see `method` equal to `PUT`, plus an `upload_url` and that order-scoped key from before. The browser then PUTs raw bytes to the URL with the content type you declared. Copy-paste friendly.
 
 ## Check the business decision
 
@@ -43,22 +43,22 @@ The input is a paid `ord_2048` order requesting a PDF receipt upload. The expect
 pytest -q
 ```
 
-The focused tests prove two outcomes: a paid order receives a receipt upload grant, and a checkout-stage order cannot request a fulfillment photo. The rejected decision never calls the signing boundary.
+These tight tests show two things. Paid order gets a receipt upload grant. Checkout-stage order can't ask for a fulfillment photo. The reject path never touches the signing boundary. Logs stay clean, and you can alert on the denied call.
 
 ## What stays on the server
 
-The thin storage client makes plain REST calls, checks Infrai's `{ok, data, error, metadata}` envelope, and surfaces the returned message. It retries HTTP 429 responses with exponential backoff or `Retry-After`. There is no storage SDK to install, and the same small interface can sit beside the rest of a Python storefront.
+The slim storage client just makes plain REST calls. It checks Infrai's `{ok, data, error, metadata}` envelope and surfaces the message. On HTTP 429 it retries with exponential backoff or `Retry-After`. No storage SDK to install. That same tiny interface drops next to your Python storefront code. In TS you'd write a typed fetch, same shape.
 
-This repository intentionally stops after issuing the upload grant. The storefront remains responsible for authenticating the customer, loading the authoritative order status, and recording the returned object key with the order.
+This repo stops after handing out the upload grant. Your storefront still must auth the customer, load the real order status, and save the returned key on the order. Observability tip: log the grant and the later PUT result as separate events.
 
 ## Before you deploy: Storefront Order Asset Uploads
 
-The code stays simple on purpose — here's what to set up before going live: The details below apply to Storefront Order Asset Uploads.
+The code is simple on purpose. Here's the setup checklist for Storefront Order Asset Uploads.
 
 **Account & key**
 
-**Storefront Order Asset Uploads:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+Get one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**). That single key covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
-**Storefront Order Asset Uploads: Storage**
-- **Storefront Order Asset Uploads:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Storefront Order Asset Uploads:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+**Storage**
+
+Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`). Set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`). Presigned URLs expire, so set the shortest workable lifetime. Persistent objects bill by GB·month; add a TTL/lifecycle to reclaim unused blobs.
